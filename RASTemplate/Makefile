@@ -8,6 +8,9 @@ CORTEXM4 = /usr/local/lib/CortexM4Libs
 ARMCLIB = $(dir $(shell which $(CC)))..
 GDBSCRIPT = $(RASLIB)/gdb-script
 
+# Board device path
+DETECT_SCRIPT = $(RASLIB)/detect-board
+
 # Command Definitions
 PREFIX = arm-none-eabi-
 
@@ -18,7 +21,7 @@ OBJCOPY := $(PREFIX)objcopy
 SIZE := $(PREFIX)size
 GDB := $(PREFIX)gdb
 
-OPENOCDCFG := $(shell find /usr/share/openocd -iname *tm4c123*)
+OPENOCDCFG := $(shell find /usr -path */scripts/board/*tm4c123* 2>/dev/null)
 OPENOCD = openocd -f $(OPENOCDCFG)
 SCREEN := screen
 
@@ -30,7 +33,6 @@ LDS = lm4f.ld
 
 OBJ := $(SRC:.c=.o)
 ASM := $(SRC:.c=.s)
-
 
 # Flag Definitions
 CFLAGS += -mthumb
@@ -76,26 +78,29 @@ size: $(TARGET)
 	$(SIZE) $<
 
 flash: $(TARGET)
-	$(GDB) $< -batch -x $(RASLIB)/gdb-script \
-		-ex "monitor reset halt"             \
-		-ex "load"                           \
-		-ex "monitor reset run"
+	$(OPENOCD) -c "init"                              \
+	           -c "reset"                             \
+	           -c "halt"                              \
+	           -c "flash probe 0"                     \
+	           -c "flash write_image erase $(TARGET)" \
+	           -c "verify_image $(TARGET)"            \
+	           -c "halt"                              \
+	           -c "shutdown"
 
 debug: $(TARGET)
 	$(GDB) $< -x $(RASLIB)/gdb-script
 
 uart:
-	$(SCREEN) /dev/lm4f 115200
+	$(SCREEN) $(shell $(DETECT_SCRIPT)) 115200
 
-run: flash
-	$(SCREEN) /dev/lm4f 115200
+start: flash
+	$(OPENOCD) -c "init; reset run; shutdown"
+
+run: start
+	$(SCREEN) $(shell $(DETECT_SCRIPT)) 115200
 
 clean:
-	-rm $(TARGET)
-	-rm $(TARGET:.axf=.out)
-	-rm $(ASM)
-	-rm $(OBJ:.o=.d)
-
+	@rm $(OBJ:.o=.d) $(ASM) $(TARGET:.axf=.out) $(TARGET) 2>/dev/null || true
 
 %.a: $(OBJ)
 	$(AR) rcs $@ $^
@@ -103,7 +108,10 @@ clean:
 %.axf: %.out
 	$(OBJCOPY) -O binary $< $@
 
-%.out: $(OBJ)
+$(RASLIB)/output/libras.a:
+	$(MAKE) -C $(RASLIB)
+
+%.out: $(OBJ) $(RASLIB)/output/libras.a
 	$(LD) -T $(LDS) -o $@ $(OBJ) $(LDFLAGS)
 
 %.o: %.c
